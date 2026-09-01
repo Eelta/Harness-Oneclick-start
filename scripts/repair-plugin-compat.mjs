@@ -86,31 +86,38 @@ async function migrateRemovedClientRuntime(profileDirectory) {
 
 async function migrateRemovedSettingsNamespace(profileDirectory) {
   const settingsPackage = '@deepseek-ai/dsh-settings'
-  const removedExport = 'settingsNamespace'
+  const removedExports = new Set(['installSettingsSection', 'settingsNamespace'])
   let repairedBundles = 0
 
   for (const packageDirectory of await installedPackageDirectories(profileDirectory)) {
     for (const path of await javascriptFiles(join(packageDirectory, 'lib'))) {
       const source = await readFile(path, 'utf8')
-      if (!source.includes(removedExport) || !source.includes(settingsPackage)) continue
+      if (![...removedExports].some(name => source.includes(name)) || !source.includes(settingsPackage)) continue
 
       let changed = false
       const migrated = source.replace(
         /import\s*\{([^}]*)\}\s*from\s*["']@deepseek-ai\/dsh-settings["'];?/g,
         (statement, specifiers) => {
-          const kept = specifiers
+          const parsed = specifiers
             .split(',')
             .map(specifier => specifier.trim())
             .filter(Boolean)
-            .filter(specifier => specifier.split(/\s+as\s+/)[0].trim() !== removedExport)
-          if (kept.length === specifiers.split(',').map(value => value.trim()).filter(Boolean).length) {
+          const removed = parsed.filter(specifier =>
+            removedExports.has(specifier.split(/\s+as\s+/)[0].trim()),
+          )
+          const kept = parsed.filter(specifier => !removed.includes(specifier))
+          if (removed.length === 0) {
             return statement
           }
           changed = true
-          const shim = `const ${removedExport} = value => value;`
+          const shims = removed.map((specifier) => {
+            const [imported, local = imported] = specifier.split(/\s+as\s+/).map(value => value.trim())
+            if (imported === 'settingsNamespace') return `const ${local} = value => value;`
+            return `const ${local} = (ctx, ns, schema, entry, hooks) => {\n  ctx.inject(['settings'], scopedCtx => scopedCtx.settings.installSection(ctx, ns, schema, entry, hooks));\n};`
+          }).join('\n')
           return kept.length > 0
-            ? `import { ${kept.join(', ')} } from "${settingsPackage}";\n${shim}`
-            : shim
+            ? `import { ${kept.join(', ')} } from "${settingsPackage}";\n${shims}`
+            : shims
         },
       )
 
@@ -121,6 +128,6 @@ async function migrateRemovedSettingsNamespace(profileDirectory) {
   }
 
   if (repairedBundles > 0) {
-    console.log(`Migrated removed dsh-settings settingsNamespace export in ${repairedBundles} bundle(s)`)
+    console.log(`Migrated removed dsh-settings helper exports in ${repairedBundles} bundle(s)`)
   }
 }
