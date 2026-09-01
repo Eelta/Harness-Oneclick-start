@@ -1,0 +1,14 @@
+# Everything generated at first run — never commit.
+# Contains downloads, builds, caches, profiles, sessions, and API keys.
+.runtime/
+
+# Local secrets and desktop session metadata.
+.env
+.env.*
+!.env.example
+.reasonix/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log
