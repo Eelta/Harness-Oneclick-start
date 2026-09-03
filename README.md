@@ -18,13 +18,15 @@ The repository contains **no downloaded or installed content** — it is only th
 
 Every start **checks and updates** all three repos (`git fetch` + reset to the latest upstream commit). Rebuilds happen only when a repo actually changed, so consecutive starts are fast.
 
+The launcher provides a read-only session-event compatibility API for plugins that still use `session.events`. It also repairs the session-delete plugin to use each sidebar row's actual session ID, including untitled or duplicate-title sessions. These compatibility fixes are reapplied after upstream updates.
+
 Before the GUI starts, the launcher also repairs stale session bookkeeping left by older web versions. It permanently deletes orphaned blank sessions that otherwise appear under **Ungrouped** without a row menu. Non-blank and workspace-owned sessions are never changed.
 
 ## Requirements
 
 - WSL2 or Linux
 - `git` inside WSL
-- Node.js, pnpm, and npm do **not** need to be preinstalled — the launcher installs Node.js 24 and checks for the latest pnpm on every start, keeping both inside `.runtime/`
+- Node.js, pnpm, and npm do **not** need to be preinstalled — the launcher installs Node.js 24 and, after updating the repos, activates the pnpm version declared in DeepSeek Harness's `package.json`, keeping both inside `.runtime/`
 
 ## Usage
 

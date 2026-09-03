@@ -13,6 +13,43 @@ if (!profile) {
 } else {
   await migrateRemovedClientRuntime(profile)
   await migrateRemovedSettingsNamespace(profile)
+  await migrateSessionDeleteIdentity(profile)
+}
+
+async function migrateSessionDeleteIdentity(profileDirectory) {
+  const path = join(profileDirectory, 'node_modules/@huanlin/dsh-plugin-session-delete/src/client.js')
+  let source
+  try { source = await readFile(path, 'utf8') } catch (error) {
+    if (error?.code === 'ENOENT') return
+    throw error
+  }
+  // Current list snapshots expose items, replacing the old byId/ids maps.
+  const original = source
+  source = source.replace(
+    'const summary = sessions && sessions.byId ? sessions.byId[sessionId] : undefined',
+    'const summary = sessions?.items?.find(item => item.sessionId === sessionId) ?? sessions?.byId?.[sessionId]',
+  ).replace(
+    '(snap && snap.ids || []).find((id) => id !== target.sessionId)',
+    '(snap?.items?.map(item => item.sessionId) ?? snap?.ids ?? []).find((id) => id !== target.sessionId)',
+  )
+  if (source.includes("row.getAttribute('data-session-id')")) {
+    if (source !== original) await writeFile(path, source)
+    return
+  }
+  const start = source.indexOf('    function openDeleteFlow(row) {')
+  const end = source.indexOf('\n    function ensureSidebarDeleteItem()', start)
+  if (start < 0 || end < 0) throw new Error('Session delete plugin changed; cannot repair sidebar identity')
+  const replacement = `    function openDeleteFlow(row) {
+      if (!row) return
+      const sessionId = row.getAttribute('data-session-id')
+      if (!sessionId) return
+      const titleEl = row.querySelector('[class*=title]')
+      const title = titleEl ? String(titleEl.innerText || '').trim() : ''
+      window.dispatchEvent(new CustomEvent(EVENT, { detail: { sessionId, title } }))
+    }
+`
+  await writeFile(path, source.slice(0, start) + replacement + source.slice(end))
+  console.log('Repaired session deletion: sidebar actions now use the exact session ID')
 }
 
 async function readJson(path) {

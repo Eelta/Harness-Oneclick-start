@@ -3,12 +3,12 @@
 # Harness-Oneclick-start — one-click launcher for the official DeepSeek Harness.
 #
 # Every start does the same four steps:
-#   1. ensure Linux Node.js 24 + the latest pnpm (kept inside .runtime/)
+#   1. ensure Linux Node.js 24 (kept inside .runtime/)
 #   2. download or update the three upstream repos into .runtime/checkouts/
 #        deepseek-harness   https://github.com/deepseek-ai/deepseek-harness.git
 #        dsh-routing-suite  https://github.com/yjh051108/dsh-routing-suite.git
 #        dsh-market         https://github.com/dsh-market/dsh-market.git
-#   3. rebuild whatever changed and install it into the managed harness home:
+#   3. activate upstream's pinned pnpm, rebuild changes, and install into the managed harness home:
 #        dsh-super-injector (routing suite), dshmarket (market),
 #        router-standard / router-spec presets (routing suite)
 #   4. boot the official `dsh web` GUI with the official DeepSeek API
@@ -91,23 +91,23 @@ ensure_linux_node() {
 }
 
 ensure_pnpm() {
-  local had_usable_pnpm=false
-  if command -v pnpm >/dev/null 2>&1 && [[ "$(command -v pnpm)" != /mnt/* ]] \
-    && [[ -n "$(pnpm --version 2>/dev/null || true)" ]]; then
-    had_usable_pnpm=true
-  fi
+  local package_manager
+  package_manager="$(node -e '
+    const fs = require("node:fs");
+    const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const spec = manifest.packageManager;
+    if (typeof spec !== "string" || !/^pnpm@\d+\.\d+\.\d+(?:[-+].*)?$/.test(spec)) {
+      console.error("DeepSeek Harness must declare a pinned pnpm packageManager");
+      process.exit(1);
+    }
+    process.stdout.write(spec);
+  ' "$HARNESS_CHECKOUT/package.json")" || die "cannot determine the required pnpm version"
   command -v corepack >/dev/null 2>&1 || die "corepack is unavailable in the selected Node.js"
-  say "Checking for the latest pnpm with Corepack"
-  if corepack enable && corepack prepare pnpm@latest --activate; then
-    hash -r
-    command -v pnpm >/dev/null 2>&1 && [[ "$(command -v pnpm)" != /mnt/* ]] \
-      && [[ -n "$(pnpm --version 2>/dev/null || true)" ]] && return
-  fi
-  if [[ "$had_usable_pnpm" == true ]]; then
-    printf 'warning: could not update pnpm; using cached pnpm %s\n' "$(pnpm --version)" >&2
-    return
-  fi
-  die "automatic pnpm installation failed"
+  say "Preparing $package_manager required by DeepSeek Harness"
+  corepack enable || die "could not enable Corepack"
+  corepack prepare "$package_manager" --activate || die "could not prepare $package_manager"
+  hash -r
+  (cd "$HARNESS_CHECKOUT" && corepack pnpm --version) || die "required pnpm is unavailable"
 }
 
 configure_optional_plugin_env() {
@@ -164,21 +164,27 @@ mark_built() {
 # ── builds (only what changed since the last successful build) ───────────────
 
 build_harness() {
-  local head
+  local head compat_key
   head="$(repo_head "$HARNESS_CHECKOUT")"
-  if was_built harness "$head" && [[ -f "$HARNESS_CHECKOUT/apps/cli/lib/bin.js" ]]; then
+  compat_key="$(sha256sum < "$PROJECT_ROOT/scripts/repair-harness-compat.mjs")"
+  compat_key="${compat_key%% *}"
+  if was_built harness "$head" && was_built harness-compat "$compat_key" \
+    && [[ -f "$HARNESS_CHECKOUT/apps/cli/lib/bin.js" ]]; then
     say "DeepSeek Harness is up to date ($head)"
     return
   fi
   say "Building DeepSeek Harness ($head)"
-  pnpm --dir "$HARNESS_CHECKOUT" install --frozen-lockfile
+  # Corepack selects packageManager from the shell's working directory before
+  # pnpm processes --dir, so enter the checkout before invoking it.
+  (cd "$HARNESS_CHECKOUT" && corepack pnpm install --frozen-lockfile)
   # Upstream upgrades can remove or rename packages. Their ignored build
   # outputs survive git reset --hard and tsdown would otherwise discover those
   # stale entries alongside the new source tree.
-  pnpm --dir "$HARNESS_CHECKOUT" run clean
-  pnpm --dir "$HARNESS_CHECKOUT" run build
+  (cd "$HARNESS_CHECKOUT" && corepack pnpm run clean)
+  (cd "$HARNESS_CHECKOUT" && corepack pnpm run build)
   [[ -f "$HARNESS_CHECKOUT/apps/cli/lib/bin.js" ]] || die "harness build produced no apps/cli/lib/bin.js"
   mark_built harness "$head"
+  mark_built harness-compat "$compat_key"
 }
 
 build_injector() {
@@ -228,7 +234,7 @@ build_market() {
 # ── installation into the managed harness home ───────────────────────────────
 
 dsh_plugin() {
-  DSH_HOME="$DSH_HOME" node "$HARNESS_CHECKOUT/apps/cli/lib/bin.js" plugin --profile web "$@"
+  DSH_HOME="$DSH_HOME" node --import "$PROJECT_ROOT/scripts/session-events-compat.mjs" "$HARNESS_CHECKOUT/apps/cli/lib/bin.js" plugin --profile web "$@"
 }
 
 plugin_is_installed() {
@@ -253,7 +259,7 @@ repair_relocated_profile() {
   local expected_store
   local repair_needed
   [[ -f "$manifest" ]] || return
-  expected_store="$(pnpm store path)"
+  expected_store="$(cd "$profile_dir" && corepack pnpm store path)"
 
   # Profiles and their pnpm metadata contain absolute paths. If the launcher
   # directory is renamed or copied, rewrite our managed link dependencies and
@@ -287,7 +293,7 @@ repair_relocated_profile() {
 
   if [[ "$repair_needed" == yes ]]; then
     say "Repairing relocated web profile dependencies"
-    pnpm --dir "$profile_dir" install --force --no-frozen-lockfile
+    (cd "$profile_dir" && corepack pnpm install --force --no-frozen-lockfile)
   fi
 }
 
@@ -384,7 +390,7 @@ start_web() {
   mkdir -p "$workspace"
   cd "$workspace"
   say "Starting Harness web GUI at http://$host:$port (workspace: $workspace)"
-  exec node "$HARNESS_CHECKOUT/apps/cli/lib/bin.js" web --host "$host" --port "$port"
+  exec node --import "$PROJECT_ROOT/scripts/session-events-compat.mjs" "$HARNESS_CHECKOUT/apps/cli/lib/bin.js" web --host "$host" --port "$port"
 }
 
 show_help() {
@@ -396,12 +402,12 @@ Usage:
   ./Harness.sh --help   show this help
 
 On every start it:
-  1. ensures Linux Node.js 24 + the latest pnpm (inside .runtime/)
+  1. ensures Linux Node.js 24 (inside .runtime/)
   2. downloads or updates into .runtime/checkouts/:
        deepseek-harness   https://github.com/deepseek-ai/deepseek-harness.git
        dsh-routing-suite  https://github.com/yjh051108/dsh-routing-suite.git
        dsh-market         https://github.com/dsh-market/dsh-market.git
-  3. rebuilds whatever changed and installs it into the managed harness home:
+  3. activates upstream's pinned pnpm, rebuilds changes, and installs:
        dsh-super-injector plugin, dshmarket plugin,
        router-standard / router-spec presets
   4. starts the official Harness web GUI (default http://127.0.0.1:13080)
@@ -424,7 +430,6 @@ main() {
   esac
   mkdir -p "$RUNTIME_ROOT" "$STATE_DIR" "$TMPDIR"
   ensure_linux_node
-  ensure_pnpm
   configure_optional_plugin_env
   command -v npm >/dev/null 2>&1 || die "Linux npm is required (missing from the selected Node.js)"
   ensure_api_key
@@ -433,6 +438,8 @@ main() {
   # anymore); marker is a file guaranteed to exist in the suite checkout
   sync_repo dsh-routing-suite https://github.com/yjh051108/dsh-routing-suite.git false injector/package.json
   sync_repo dsh-market https://github.com/dsh-market/dsh-market.git false package.json
+  node "$PROJECT_ROOT/scripts/repair-harness-compat.mjs" "$HARNESS_CHECKOUT"
+  ensure_pnpm
   build_harness
   build_injector
   build_market
