@@ -20,6 +20,8 @@ Every start **checks and updates** all three repos (`git fetch` + reset to the l
 
 The launcher provides a read-only session-event compatibility API for plugins that still use `session.events`. It also repairs the session-delete plugin to use each sidebar row's actual session ID, including untitled or duplicate-title sessions. These compatibility fixes are reapplied after upstream updates.
 
+The known merge conflicts shipped in dsh-market commit `f1779d5` are repaired while retaining both features, then rebuilt. Already-fixed upstream sources pass through unchanged. If an update restores conflicted client artifacts, the launcher rebuilds them too.
+
 Before the GUI starts, the launcher also repairs stale session bookkeeping left by older web versions. It permanently deletes orphaned blank sessions that otherwise appear under **Ungrouped** without a row menu. Non-blank and workspace-owned sessions are never changed.
 
 ## Requirements
@@ -43,6 +45,8 @@ Harness GUI: http://127.0.0.1:13080
 ```
 
 After startup, open a new session and pick the **Router Standard (experimental)** preset. Stop with `Ctrl+C`.
+
+Only one launcher may use a runtime directory at a time. A duplicate launch or occupied web port stops before updates and builds; use the existing window, or stop its terminal with `Ctrl+C` before restarting.
 
 ## Environment overrides
 

@@ -217,18 +217,32 @@ build_injector() {
   printf '%s\n' "$harness_head" > "$STATE_DIR/built-injector-harness"
 }
 
+market_artifacts_are_usable() {
+  [[ -s "$MARKET_CHECKOUT/lib/index.js" && -s "$MARKET_CHECKOUT/client/client.js" \
+    && -s "$MARKET_CHECKOUT/client/client.js.map" ]] || return 1
+  # Upstream tracks the client bundle. Even an unchanged git reset can put
+  # its broken generated files back after a successful local rebuild.
+  ! grep -qE '^(<<<<<<< |=======$|>>>>>>> )' \
+    "$MARKET_CHECKOUT/client/client.js" "$MARKET_CHECKOUT/client/client.js.map"
+}
+
 build_market() {
-  local head
+  local head compat_key
+  node "$PROJECT_ROOT/scripts/repair-market-source.mjs" "$MARKET_CHECKOUT"
   head="$(repo_head "$MARKET_CHECKOUT")"
-  if was_built market "$head" && [[ -f "$MARKET_CHECKOUT/lib/index.js" ]]; then
+  compat_key="$(sha256sum < "$PROJECT_ROOT/scripts/repair-market-source.mjs")"
+  compat_key="${compat_key%% *}"
+  if was_built market "$head" && was_built market-compat "$compat_key" \
+    && market_artifacts_are_usable; then
     say "dsh-market is up to date"
     return
   fi
   say "Building dsh-market"
   (cd "$MARKET_CHECKOUT" && npm install --no-audit --no-fund)
   [[ -f "$MARKET_CHECKOUT/lib/index.js" ]] || (cd "$MARKET_CHECKOUT" && npm run build)
-  [[ -f "$MARKET_CHECKOUT/lib/index.js" ]] || die "market build produced no lib/index.js"
+  market_artifacts_are_usable || die "market build produced missing or conflicted artifacts"
   mark_built market "$head"
+  mark_built market-compat "$compat_key"
 }
 
 # ── installation into the managed harness home ───────────────────────────────
@@ -372,8 +386,8 @@ ensure_api_key() {
       chmod 600 "$env_file" 2>/dev/null || true
       DEEPSEEK_API_KEY="$key"
     else
-      printf 'warning: DEEPSEEK_API_KEY is not set; model requests will fail until a key is provided\n' >&2
-      printf '         set DEEPSEEK_API_KEY or add it to %s\n' "$env_file" >&2
+      printf 'note: DEEPSEEK_API_KEY is not set; credentials saved in Harness settings can still be used\n' >&2
+      printf '      if no key is configured, set it in Harness settings or add it to %s\n' "$env_file" >&2
     fi
   fi
   if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
@@ -382,6 +396,15 @@ ensure_api_key() {
 }
 
 # ── launch ───────────────────────────────────────────────────────────────────
+
+ensure_single_instance() {
+  command -v flock >/dev/null 2>&1 || die "flock is required (install util-linux)"
+  # Keep the lock through exec into Node, so a second launch cannot update
+  # checkouts or repair storage underneath this running instance.
+  exec 9>"$RUNTIME_ROOT/launcher.lock"
+  flock -n 9 || die "Harness is already starting or running from $RUNTIME_ROOT; use its window or stop it with Ctrl+C before restarting"
+  node "$PROJECT_ROOT/scripts/check-web-port.mjs"
+}
 
 start_web() {
   local workspace="${DSH_WORKSPACE:-$PWD}"
@@ -430,6 +453,7 @@ main() {
   esac
   mkdir -p "$RUNTIME_ROOT" "$STATE_DIR" "$TMPDIR"
   ensure_linux_node
+  ensure_single_instance
   configure_optional_plugin_env
   command -v npm >/dev/null 2>&1 || die "Linux npm is required (missing from the selected Node.js)"
   ensure_api_key
