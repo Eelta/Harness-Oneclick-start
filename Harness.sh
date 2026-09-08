@@ -218,12 +218,24 @@ build_injector() {
 }
 
 market_artifacts_are_usable() {
-  [[ -s "$MARKET_CHECKOUT/lib/index.js" && -s "$MARKET_CHECKOUT/client/client.js" \
-    && -s "$MARKET_CHECKOUT/client/client.js.map" ]] || return 1
+  local artifact
+  for artifact in "$MARKET_CHECKOUT/lib/index.js" "$MARKET_CHECKOUT/client/client.js"; do
+    if [[ ! -s "$artifact" ]]; then
+      printf 'Missing or empty market artifact: %s\n' "$artifact" >&2
+      return 1
+    fi
+  done
+  # Newer releases disable source maps; only inspect a map when present.
   # Upstream tracks the client bundle. Even an unchanged git reset can put
   # its broken generated files back after a successful local rebuild.
-  ! grep -qE '^(<<<<<<< |=======$|>>>>>>> )' \
-    "$MARKET_CHECKOUT/client/client.js" "$MARKET_CHECKOUT/client/client.js.map"
+  for artifact in "$MARKET_CHECKOUT/lib/index.js" "$MARKET_CHECKOUT/client/client.js" \
+    "$MARKET_CHECKOUT/client/client.js.map"; do
+    [[ -e "$artifact" ]] || continue
+    if grep -qE '^(<<<<<<< |=======$|>>>>>>> )' "$artifact"; then
+      printf 'Conflicted market artifact: %s\n' "$artifact" >&2
+      return 1
+    fi
+  done
 }
 
 build_market() {
