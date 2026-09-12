@@ -24,7 +24,11 @@
 
 GUI 启动前还会修复旧版网页端遗留的会话记账问题：永久删除没有归属工作区、且从未收到用户消息的空白会话，避免它们显示在“未分组”下却没有行菜单。非空白会话和工作区内会话不会被改动。
 
+启动时会将两个 Router 预设中的旧版 `persona.text` 配置迁移为 `persona.prefix`，保留原提示词，修复新版 Harness 下选择工作区或新建会话无响应的问题。
+
 ## 环境要求
+
+启动器会为第三方模型适配器补齐 `x-opencode-session` 和 Harness 原生会话请求头，使用当前对话的真实 ID，修复 OpenCode Go 的 `MissingSessionID` 错误；每次更新后自动重新应用。已有安装需重新运行 `./Harness.sh` 以构建并加载修复。
 
 - WSL2 或 Linux
 - WSL 内有 `git`

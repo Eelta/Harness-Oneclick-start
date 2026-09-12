@@ -24,7 +24,11 @@ The known merge conflicts shipped in dsh-market commit `f1779d5` are repaired wh
 
 Before the GUI starts, the launcher also repairs stale session bookkeeping left by older web versions. It permanently deletes orphaned blank sessions that otherwise appear under **Ungrouped** without a row menu. Non-blank and workspace-owned sessions are never changed.
 
+At startup, legacy `persona.text` fields in both Router presets are migrated to `persona.prefix`, preserving the prompt and fixing workspace selection and session creation failures with newer Harness versions.
+
 ## Requirements
+
+The launcher adds `x-opencode-session` and the native Harness session header to third-party model requests, using the current conversation ID to fix OpenCode Go's `MissingSessionID` error. The patch is reapplied after updates. For existing installations, rerun `./Harness.sh` to build and load the fix.
 
 - WSL2 or Linux
 - `git` inside WSL

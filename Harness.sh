@@ -358,6 +358,7 @@ install_presets() {
     if [[ -d "$ROUTING_CHECKOUT/preset/$preset" ]]; then
       rm -rf "$dest/$preset"
       cp -a "$ROUTING_CHECKOUT/preset/$preset" "$dest/"
+      node "$PROJECT_ROOT/scripts/repair-router-compat.mjs" "$dest/$preset/agent.cordis.yml"
     else
       printf 'warning: preset %s not found upstream; skipping\n' "$preset" >&2
     fi
