@@ -6,25 +6,24 @@
 
 面向 WSL2/Linux 的**官方** [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 一键启动器，直接使用官方 DeepSeek API（`DEEPSEEK_API_KEY`）。
 
-本仓库**不包含任何下载或安装的内容**，只是首次运行的入口代码。每次启动都会把三个上游仓库下载（或更新）到当前目录的 `.runtime/` 下，构建并安装有变更的部分，然后启动官方 Harness 网页版。
+本仓库**不包含任何下载或安装的内容**，只是首次运行的入口代码。每次启动都会把两个上游仓库下载（或更新）到当前目录的 `.runtime/` 下，构建并安装有变更的部分，然后启动官方 Harness 网页版。
 
 ## 依次自动安装的内容
 
 1. **deepseek-harness** —— 官方 Harness（克隆到 `.runtime/checkouts/deepseek-harness`，用 pnpm 构建）
-2. **dsh-routing-suite** —— 注入器 × 思维模式路由套装（`.runtime/checkouts/dsh-routing-suite`）：
-   - `dsh-super-injector` 插件（运行时注入器，`dev_*` 工具全家桶）
-   - `router-standard` / `router-spec` 智能体预设
-3. **dsh-market** —— 可视化插件市场（`.runtime/checkouts/dsh-market`，以 `dshmarket` 插件装配）
+2. **dsh-market** —— 可视化插件市场（`.runtime/checkouts/dsh-market`，以 `dshmarket` 插件装配）
 
-每次启动都会**自动检查并更新**以上 3 个库（`git fetch` 并重置到上游最新提交）；只有库内容真正变化时才重新构建，因此连续启动很快。
+每次启动都会**自动检查并更新**以上 2 个库（`git fetch` 并重置到上游最新提交）；库内容或相关兼容修复变化时才重新构建，因此连续启动很快。
+
+启动器已取消 `dsh-routing-suite` 的拉取、构建和安装，并会卸载旧版启动器安装的 `dsh-super-injector` 注入器。已有 Router 预设和会话保留；Router 预设不再自动安装或更新。
+
+若 Router 预设已被删除，启动器会将仍引用它的空白会话切换为官方 `standard`，恢复模式选择。修复前备份会话日志到 `$DSH_HOME/backups/`，通过追加预设选择记录完成迁移，保留原日志；已有消息或已开始对话的会话不自动迁移。
 
 启动器为尚未适配新版 Harness 的插件提供只读会话事件兼容接口，避免旧版 `session.events` 调用导致对话失败。会话删除插件通过侧边栏记录的实际 ID 定位会话，兼容未命名及同名会话；相关修复会在更新后自动重新应用。
 
 针对 dsh-market 提交 `f1779d5` 遗留的已知合并冲突，启动器会保留双方功能并重新构建；上游修复后自动跳过。更新恢复了带冲突的前端产物时，也会重新构建。
 
 GUI 启动前还会修复旧版网页端遗留的会话记账问题：永久删除没有归属工作区、且从未收到用户消息的空白会话，避免它们显示在“未分组”下却没有行菜单。非空白会话和工作区内会话不会被改动。
-
-启动时会将两个 Router 预设中的旧版 `persona.text` 配置迁移为 `persona.prefix`，保留原提示词，修复新版 Harness 下选择工作区或新建会话无响应的问题。
 
 ## 环境要求
 
@@ -42,13 +41,13 @@ chmod +x Harness.sh
 ./Harness.sh
 ```
 
-首次运行会询问你的 DeepSeek API Key（保存在 `.runtime/dsh-home/.env`，不会提交），随后下载三个仓库、构建、安装插件与预设，最后启动：
+首次运行会询问你的 DeepSeek API Key（保存在 `.runtime/dsh-home/.env`，不会提交），随后下载两个仓库、构建、安装市场插件，最后启动：
 
 ```text
 Harness GUI: http://127.0.0.1:13080
 ```
 
-启动后新建会话，选择 **Router Standard (experimental)** 预设即可。`Ctrl+C` 停止。
+启动后即可新建会话。`Ctrl+C` 停止。
 
 同一运行目录只允许一个启动器实例。重复启动或网页端口被占用时，会在更新、构建前退出并提示；请使用已运行的窗口，或先在原终端按 `Ctrl+C` 再重新启动。
 
@@ -75,7 +74,7 @@ DSH_WORKSPACE=/mnt/e/my-project ./Harness.sh
 所有下载与生成的内容都在 `.runtime/` 下：
 
 ```text
-.runtime/checkouts/    三个上游仓库
+.runtime/checkouts/    两个上游仓库（旧版下载的仓库保留）
 .runtime/dsh-home/     Harness 家目录：profile、会话、预设、API Key
 .runtime/nvm/          Node.js 工具链
 .runtime/pnpm-*/       pnpm store 与 home

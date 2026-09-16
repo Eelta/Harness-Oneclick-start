@@ -4,13 +4,11 @@
 #
 # Every start does the same four steps:
 #   1. ensure Linux Node.js 24 (kept inside .runtime/)
-#   2. download or update the three upstream repos into .runtime/checkouts/
+#   2. download or update the two upstream repos into .runtime/checkouts/
 #        deepseek-harness   https://github.com/deepseek-ai/deepseek-harness.git
-#        dsh-routing-suite  https://github.com/yjh051108/dsh-routing-suite.git
 #        dsh-market         https://github.com/dsh-market/dsh-market.git
 #   3. activate upstream's pinned pnpm, rebuild changes, and install into the managed harness home:
-#        dsh-super-injector (routing suite), dshmarket (market),
-#        router-standard / router-spec presets (routing suite)
+#        dshmarket (market)
 #   4. boot the official `dsh web` GUI with the official DeepSeek API
 #
 # Everything downloaded or generated lives under .runtime/, so the repository
@@ -34,9 +32,7 @@ RUNTIME_ROOT="${DSH_RUNTIME_ROOT:-$PROJECT_ROOT/.runtime}"
 CHECKOUTS_DIR="$RUNTIME_ROOT/checkouts"
 STATE_DIR="$RUNTIME_ROOT/state"
 HARNESS_CHECKOUT="$CHECKOUTS_DIR/deepseek-harness"
-ROUTING_CHECKOUT="$CHECKOUTS_DIR/dsh-routing-suite"
 MARKET_CHECKOUT="$CHECKOUTS_DIR/dsh-market"
-INJECTOR_CHECKOUT="$ROUTING_CHECKOUT/injector"
 DSH_HOME="${DSH_HOME:-$RUNTIME_ROOT/dsh-home}"
 export DSH_HOME
 
@@ -187,36 +183,6 @@ build_harness() {
   mark_built harness-compat "$compat_key"
 }
 
-build_injector() {
-  local head harness_head
-  # the injector is vendored into the suite repo (upstream flattened its
-  # submodules), so key the build on the suite checkout's HEAD; a leftover
-  # submodule .git pointer inside injector/ would otherwise go stale
-  head="$(repo_head "$ROUTING_CHECKOUT")"
-  harness_head="$(repo_head "$HARNESS_CHECKOUT")"
-  if was_built injector "$head" \
-    && [[ "$(cat "$STATE_DIR/built-injector-harness" 2>/dev/null || true)" == "$harness_head" ]] \
-    && [[ -f "$INJECTOR_CHECKOUT/lib/index.js" ]] && [[ -s "$INJECTOR_CHECKOUT/lib/client.js" ]]; then
-    say "dsh-super-injector is up to date"
-    return
-  fi
-  say "Building dsh-super-injector"
-  mkdir -p "$INJECTOR_CHECKOUT/node_modules/@types"
-  node -e '
-    const fs = require("node:fs");
-    const path = require("node:path");
-    const link = path.resolve(process.argv[1]);
-    const target = path.resolve(process.argv[2]);
-    fs.rmSync(link, { recursive: true, force: true });
-    fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
-  ' "$INJECTOR_CHECKOUT/node_modules/@types/node" "$HARNESS_CHECKOUT/node_modules/@types/node"
-  DSH_CHECKOUT="$HARNESS_CHECKOUT" bash "$INJECTOR_CHECKOUT/scripts/build.sh"
-  (cd "$INJECTOR_CHECKOUT" && "$HARNESS_CHECKOUT/node_modules/.bin/tsdown")
-  [[ -s "$INJECTOR_CHECKOUT/lib/client.js" ]] || die "injector client bundle was not produced"
-  mark_built injector "$head"
-  printf '%s\n' "$harness_head" > "$STATE_DIR/built-injector-harness"
-}
-
 market_artifacts_are_usable() {
   local artifact
   for artifact in "$MARKET_CHECKOUT/lib/index.js" "$MARKET_CHECKOUT/client/client.js"; do
@@ -292,10 +258,9 @@ repair_relocated_profile() {
   # rebuild node_modules against this runtime's store before `dsh plugin add`.
   repair_needed="$(node -e '
     const fs = require("node:fs");
-    const [manifestPath, modulesPath, expectedStore, injector, market] = process.argv.slice(1);
+    const [manifestPath, modulesPath, expectedStore, market] = process.argv.slice(1);
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
     const desiredLinks = new Map([
-      ["@dsh-external/dsh-super-injector", `link:${injector}`],
       ["dshmarket", `link:${market}`],
     ]);
     let changed = false;
@@ -315,7 +280,7 @@ repair_relocated_profile() {
       wrongStore = Boolean(match && match[1] !== expectedStore);
     }
     process.stdout.write(changed || wrongStore ? "yes" : "no");
-  ' "$manifest" "$modules_state" "$expected_store" "$INJECTOR_CHECKOUT" "$MARKET_CHECKOUT")"
+  ' "$manifest" "$modules_state" "$expected_store" "$MARKET_CHECKOUT")"
 
   if [[ "$repair_needed" == yes ]]; then
     say "Repairing relocated web profile dependencies"
@@ -324,12 +289,6 @@ repair_relocated_profile() {
 }
 
 install_plugins() {
-  if plugin_is_installed @dsh-external/dsh-super-injector "$INJECTOR_CHECKOUT"; then
-    say "dsh-super-injector is already installed"
-  else
-    say "Installing dsh-super-injector into the web profile"
-    dsh_plugin add "$INJECTOR_CHECKOUT"
-  fi
   if plugin_is_installed dshmarket "$MARKET_CHECKOUT"; then
     say "dshmarket is already installed"
   else
@@ -340,36 +299,36 @@ install_plugins() {
 
 remove_unwanted_plugins() {
   local profile_manifest="$DSH_HOME/profiles/web/package.json"
+  local package_name
   [[ -f "$profile_manifest" ]] || return
-  if node -e '
-    const manifest = require(process.argv[1]);
-    process.exit(Object.hasOwn(manifest.dependencies ?? {}, process.argv[2]) ? 0 : 1);
-  ' "$profile_manifest" dsh-vscode-mode; then
-    say "Removing unneeded dsh-vscode-mode plugin from the web profile"
-    dsh_plugin remove dsh-vscode-mode
-  fi
-}
-
-install_presets() {
-  local dest="$DSH_HOME/.agent-presets" preset router_standard_config
-  say "Installing router presets into $dest"
-  mkdir -p "$dest"
-  for preset in router-standard router-spec; do
-    if [[ -d "$ROUTING_CHECKOUT/preset/$preset" ]]; then
-      rm -rf "$dest/$preset"
-      cp -a "$ROUTING_CHECKOUT/preset/$preset" "$dest/"
-      node "$PROJECT_ROOT/scripts/repair-router-compat.mjs" "$dest/$preset/agent.cordis.yml"
-    else
-      printf 'warning: preset %s not found upstream; skipping\n' "$preset" >&2
+  # Retire plugins installed by older launcher versions. Presets and session
+  # data are independent of profile dependencies and stay in the harness home.
+  for package_name in dsh-vscode-mode @dsh-external/dsh-super-injector; do
+    if node -e '
+      const manifest = require(process.argv[1]);
+      process.exit(Object.hasOwn(manifest.dependencies ?? {}, process.argv[2]) ? 0 : 1);
+    ' "$profile_manifest" "$package_name"; then
+      say "Removing unneeded $package_name plugin from the web profile"
+      dsh_plugin remove "$package_name"
     fi
+    # pnpm can leave a previously linked local package behind after removal.
+    # Unlink only the profile entry; keep the downloaded checkout intact.
+    node -e '
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const link = path.join(process.argv[1], "node_modules", process.argv[2]);
+      try {
+        if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    ' "$DSH_HOME/profiles/web" "$package_name"
   done
-  router_standard_config="$dest/router-standard/agent.cordis.yml"
-  if [[ -f "$router_standard_config" ]]; then
-    node "$PROJECT_ROOT/scripts/configure-router-preset.mjs" "$router_standard_config" 0.7
-  fi
 }
 
 repair_runtime_state() {
+  say "Repairing blank sessions with retired Router presets"
+  node "$PROJECT_ROOT/scripts/repair-retired-presets.mjs" "$HARNESS_CHECKOUT" "$DSH_HOME"
   say "Repairing stale session bookkeeping"
   node "$PROJECT_ROOT/scripts/repair-runtime.mjs" "$DSH_HOME"
 }
@@ -441,11 +400,9 @@ On every start it:
   1. ensures Linux Node.js 24 (inside .runtime/)
   2. downloads or updates into .runtime/checkouts/:
        deepseek-harness   https://github.com/deepseek-ai/deepseek-harness.git
-       dsh-routing-suite  https://github.com/yjh051108/dsh-routing-suite.git
        dsh-market         https://github.com/dsh-market/dsh-market.git
   3. activates upstream's pinned pnpm, rebuilds changes, and installs:
-       dsh-super-injector plugin, dshmarket plugin,
-       router-standard / router-spec presets
+       dshmarket plugin
   4. starts the official Harness web GUI (default http://127.0.0.1:13080)
 
 Environment:
@@ -471,22 +428,19 @@ main() {
   command -v npm >/dev/null 2>&1 || die "Linux npm is required (missing from the selected Node.js)"
   ensure_api_key
   sync_repo deepseek-harness https://github.com/deepseek-ai/deepseek-harness.git false package.json
-  # upstream flattened its submodules into the main repo (no .gitmodules at root
-  # anymore); marker is a file guaranteed to exist in the suite checkout
-  sync_repo dsh-routing-suite https://github.com/yjh051108/dsh-routing-suite.git false injector/package.json
   sync_repo dsh-market https://github.com/dsh-market/dsh-market.git false package.json
   node "$PROJECT_ROOT/scripts/repair-harness-compat.mjs" "$HARNESS_CHECKOUT"
   ensure_pnpm
   build_harness
-  build_injector
   build_market
   repair_relocated_profile
   install_plugins
   remove_unwanted_plugins
-  install_presets
   repair_plugin_compat
   repair_runtime_state
   start_web
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
