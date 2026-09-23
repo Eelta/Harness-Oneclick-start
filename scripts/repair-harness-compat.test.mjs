@@ -1,7 +1,43 @@
 import assert from 'node:assert/strict'
 import { stripTypeScriptTypes } from 'node:module'
 import { test } from 'node:test'
-import { repairPiSessionHeaders } from './repair-harness-compat.mjs'
+import { repairPiSessionHeaders, repairSessionRowIdentity } from './repair-harness-compat.mjs'
+
+const rows = `<div
+      role="treeitem"
+      onClick={onToggle}
+    />
+    <div
+      role="treeitem"
+      aria-selected={selected}
+      onClick={() => { onOpen(result.id) }}
+    />
+    <div
+      role="treeitem"
+      aria-selected={selected}
+      onClick={() => { onOpen(node.id) }}
+    />
+`
+
+for (const description of ['', "      aria-description={row.archived ? t('toast.archivedNotOpenable') : undefined}\n"]) {
+  for (const newline of ['\n', '\r\n']) {
+    test(`session identity supports ${description ? 'new' : 'old'} rows with ${newline === '\n' ? 'LF' : 'CRLF'}`, () => {
+      const source = rows.replace('      onClick={() => { onOpen(node.id) }}', `${description}      onClick={() => { onOpen(node.id) }}`).replaceAll('\n', newline)
+      const patched = repairSessionRowIdentity(source)
+      assert.equal(patched.split('data-session-id=').length, 2)
+      assert.ok(patched.includes(`data-session-id={node.id}${newline}      onClick={() => { onOpen(node.id) }}`))
+      assert.equal(patched.replace(`      data-session-id={node.id}${newline}`, ''), source)
+      assert.equal(repairSessionRowIdentity(patched), patched)
+    })
+  }
+}
+
+test('session identity preserves indentation and rejects missing or ambiguous session rows', () => {
+  const source = rows.replace('      onClick={() => { onOpen(node.id) }}', '\tonClick={() => { onOpen(node.id) }}')
+  assert.ok(repairSessionRowIdentity(source).includes('\tdata-session-id={node.id}\n\tonClick='))
+  assert.throws(() => repairSessionRowIdentity(rows.replace('onOpen(node.id)', 'onOpen(other.id)')), /Session row markup changed/)
+  assert.throws(() => repairSessionRowIdentity(rows + rows), /Session row markup changed/)
+})
 
 const original = `function requestHeaders(headers: Readonly<Record<string, string>> | undefined): Record<string, string> {
   const attribution = attributionHeaders()

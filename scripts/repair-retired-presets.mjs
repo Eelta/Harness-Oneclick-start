@@ -42,6 +42,17 @@ async function exists(path) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error }
 }
 
+/** Accept both the declarative Web bundle and the older preset directory. */
+export async function assertStandardPresetAvailable(checkout) {
+  for (const path of [
+    'packages/bundle/web-app/presets/standard.patch.yml',
+    'packages/preset/agent-presets/presets/standard/agent.cordis.yml',
+  ]) {
+    if (await exists(join(checkout, path))) return
+  }
+  throw new Error('Cannot repair retired presets: the official standard preset is missing')
+}
+
 export async function repairRetiredPresets(checkout, home) {
   const missing = new Set()
   for (const id of ['router-standard', 'router-spec']) {
@@ -49,9 +60,7 @@ export async function repairRetiredPresets(checkout, home) {
   }
   const sessions = join(home, 'sessions')
   if (!missing.size || !await exists(sessions)) return
-  if (!await exists(join(checkout, 'packages/preset/agent-presets/presets/standard/agent.cordis.yml'))) {
-    throw new Error('Cannot repair retired presets: the official standard preset is missing')
-  }
+  await assertStandardPresetAvailable(checkout)
   const { Context } = await import(pathToFileURL(join(checkout, 'vendor/cordis/lib/index.js')))
   const { default: Persistence } = await import(pathToFileURL(join(checkout, 'packages/session/session-persistence-jsonl/lib/index.js')))
   const ctx = new Context()

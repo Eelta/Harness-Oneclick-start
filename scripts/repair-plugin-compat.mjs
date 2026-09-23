@@ -5,6 +5,8 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import process from 'node:process'
+import { repairTurnRewindCompatibility } from './repair-turn-rewind-compat.mjs'
+import { repairBetterSidebarCompatibility } from './repair-better-sidebar-compat.mjs'
 
 const profile = process.argv[2]
 if (!profile) {
@@ -14,6 +16,8 @@ if (!profile) {
   await migrateRemovedClientRuntime(profile)
   await migrateRemovedSettingsNamespace(profile)
   await migrateSessionDeleteIdentity(profile)
+  await repairTurnRewindCompatibility(profile)
+  await repairBetterSidebarCompatibility(profile)
 }
 
 async function migrateSessionDeleteIdentity(profileDirectory) {

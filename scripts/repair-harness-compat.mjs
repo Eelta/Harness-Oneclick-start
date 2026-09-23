@@ -3,6 +3,18 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+/** Add session identity without depending on adjacent accessibility attributes. */
+export function repairSessionRowIdentity(source) {
+  if (source.includes('data-session-id={node.id}')) return source
+  // The session click target distinguishes this row from workspace/search rows.
+  const anchor = /^([ \t]*)onClick=\{\(\) => \{ onOpen\(node\.id\) \}\}(?=\r?$)/gm
+  if ([...source.matchAll(anchor)].length !== 1) {
+    throw new Error('Session row markup changed; cannot apply stable session identity')
+  }
+  const newline = source.includes('\r\n') ? '\r\n' : '\n'
+  return source.replace(anchor, (match, indent) => `${indent}data-session-id={node.id}${newline}${match}`)
+}
+
 /** Forward conversation identity even when the provider SDK ignores sessionId. */
 export function repairPiSessionHeaders(source) {
   const call = 'headers: requestHeaders(profile.headers)'
@@ -30,10 +42,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!checkout) throw new Error('usage: repair-harness-compat.mjs <checkout>')
   const path = join(checkout, 'packages/client/ui-workspace/src/client/rows/Rows.tsx')
   const source = await readFile(path, 'utf8')
-  if (!source.includes('data-session-id={node.id}')) {
-    const anchor = 'role="treeitem"\n      aria-selected={selected}\n      onClick={() => { onOpen(node.id) }}'
-    if (source.split(anchor).length !== 2) throw new Error('Session row markup changed; cannot apply stable session identity')
-    await writeFile(path, source.replace(anchor, 'data-session-id={node.id}\n      ' + anchor))
+  const repairedRows = repairSessionRowIdentity(source)
+  if (repairedRows !== source) {
+    await writeFile(path, repairedRows)
     console.log('Added stable session IDs to sidebar rows')
   }
   const adapterPath = join(checkout, 'packages/llm/llm-pi-ai/src/adapter.ts')

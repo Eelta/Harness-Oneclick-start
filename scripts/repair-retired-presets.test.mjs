@@ -1,6 +1,29 @@
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { needsPresetRepair, repairBlankPreset } from './repair-retired-presets.mjs'
+import { assertStandardPresetAvailable, needsPresetRepair, repairBlankPreset } from './repair-retired-presets.mjs'
+
+for (const path of [
+  'packages/bundle/web-app/presets/standard.patch.yml',
+  'packages/preset/agent-presets/presets/standard/agent.cordis.yml',
+]) {
+  test(`accepts the official standard preset at ${path}`, async (t) => {
+    const checkout = await mkdtemp(join(tmpdir(), 'harness-presets-'))
+    t.after(() => rm(checkout, { recursive: true, force: true }))
+    const preset = join(checkout, path)
+    await mkdir(dirname(preset), { recursive: true })
+    await writeFile(preset, '# official standard preset fixture\n')
+    await assert.doesNotReject(assertStandardPresetAvailable(checkout))
+  })
+}
+
+test('refuses repair when neither official standard preset exists', async (t) => {
+  const checkout = await mkdtemp(join(tmpdir(), 'harness-presets-'))
+  t.after(() => rm(checkout, { recursive: true, force: true }))
+  await assert.rejects(assertStandardPresetAvailable(checkout), /official standard preset is missing/)
+})
 
 const missing = new Set(['router-standard', 'router-spec'])
 const header = { agentPreset: 'router-standard' }
